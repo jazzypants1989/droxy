@@ -1,0 +1,41 @@
+{
+  "name": "droxy",
+  "version": "1.0.1",
+  "description": "jessquery's scrawny little brother.",
+  "main": "index.js",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "jquery",
+    "javascript",
+    "typescript",
+    "JSDoc",
+    "Dom Manipulation",
+    "Easy",
+    "Small",
+    "Tiny",
+    "Modern",
+    "ES6",
+    "Lightweight",
+    "Light",
+    "DOM",
+    "prototype",
+    "document",
+    "querySelector",
+    "querySelectorAll"
+  ],
+  "author": "Jesse Pence",
+  "license": "MPL-2.0",
+  "homepage": "https://jazzypants.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jazzypants1989/jessquery.git"
+  }
+}
