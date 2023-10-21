@@ -25,6 +25,7 @@ declare module "droxy" {
    * - {@link DomProxy.moveTo} - Move the element to a new parent element in the DOM. By default, it is appended inside the new parent element, but you change change this with the `position` option. The original element is removed from its current location. If you want to clone the element instead of moving it, use {@link DomProxy.cloneTo}.
    * - {@link DomProxy.become} - Replace the element with a new element. By default, the new element is cloned from its original location. To permanentaly remove it instead, set the mode to 'move'.
    * - {@link DomProxy.purge} - Remove the element from the DOM entirely
+   * - {@link DomProxy.send} - Sends an HTTP request using the current element as the body of the request unless otherwise specified.
    * - {@link DomProxy.do} - Executes an asynchronous function and waits for it to resolve before continuing the chain (can be synchronous too)
    * - {@link DomProxy.defer} - Schedules a function for deferred execution on the element. This will push the operation to the very end of the internal event loop.
    * - {@link DomProxy.transition} - Animate the element using the WAAPI. The queue will wait for the animation to complete before continuing.
@@ -74,13 +75,22 @@ declare module "droxy" {
       handler: EventListenerOrEventListenerObject
     ) => DomProxy<T>
 
-    /** Change the HTML of the element with an **UNSANITIZED** string of new HTML. This is useful if you want to add a script tag or something. If you want to sanitize the HTML, use {@link DomProxy.sanitize} instead.
+    /** Change the HTML of the element with an **UNSANITIZED** string of new HTML. If you want to sanitize the HTML, use {@link DomProxy.sanitize} instead.
+     *
+     * - By default, only the element's children will be replaced (innerHTML). If you want to replace the element itself (outerHTML), set the second argument to true.
+     *
      * @param newHtml The new HTML
+     * @param outerHTML Whether to replace the element itself or just its children
      * @returns This {@link DomProxy}
      * @example
      * $('button').html('<span>Click me!</span>')
+     * // <button><span>Click me!</span></button>
+     *
+     * @example
+     * $('button').html('<span>Click me!</span>', true)
+     * // <span>Click me!</span>
      */
-    html: (newHtml: string) => DomProxy<T>
+    html: (newHtml: string, outerHTML?: boolean) => DomProxy<T>
 
     /**
      * Sanitizes a string of untrusted HTML using the setHTML API, and sets the sanitized HTML to the provided element.
@@ -91,7 +101,8 @@ declare module "droxy" {
      * @returns {DomProxy} - The provided element with the sanitized content set.
      *
      * @example
-     * const maliciousHTML = '<span>Safe Content</span><script>alert("hacked!")</script>';
+     * const maliciousHTML = `<span>Safe Content</span>
+     *                        <script>alert("hacked!")</script>`;
      * const customSanitizer = new Sanitizer({
      *   allowElements: ['span']
      * });
@@ -145,6 +156,14 @@ declare module "droxy" {
     ) => DomProxy<T>
 
     /** Add a stylesheet to the ENTIRE DOCUMENT (this is useful for things like :hover styles). Got a good idea for how to make this scoped to a single element? Open a PR!
+     *
+     * - This should be used only when you need to do something like set a pseudo-class on the fly. Otherwise, just write a real stylesheet.
+     *
+     * - Got a good idea for how to make this scoped to a single element? Open a PR! I was thinking something like the `@scope` rule being automatically inserted, but that's still only in Chromium browsers.
+     *
+     * {@link https://css.oddbird.net/scope/explainer/}
+     *
+     * - Right now, every rule will be given an !important flag, so it will override any existing styles. This is drastic I know, but it's the only way to make this work if you're creating other inline styles.
      * @param css The CSS to add
      * @returns This {@link DomProxy}
      * @example
@@ -153,39 +172,61 @@ declare module "droxy" {
      */
     addStylesheet: (css: string) => DomProxy<T>
 
-    /** Add a class to the element
+    /** Add one or more classes to the element. Just add a comma in between each class name, or use spread syntax from an array.
      * @param className The class name
      * @returns This {@link DomProxy}
      * @example
      * $('button').addClass('btn')
+     *
+     * @example
+     * const classes = ['btn', 'btn-primary']
+     * $('button').addClass(...classes)
+     *
+     * @example
+     * $('button').addClass('btn', 'btn-primary')
      */
     addClass: (className: string) => DomProxy<T>
 
-    /** Remove a class from the element
+    /** Remove one or more classes from the element. Just add a comma in between each class name, or use spread syntax from an array.
      * @param className The class name
      * @returns This {@link DomProxy}
      * @example
      * $('button').removeClass('btn')
+     *
+     * @example
+     * const classes = ['btn', 'btn-primary']
+     * $('button').removeClass(...classes)
+     *
+     * @example
+     * $('button').removeClass('btn', 'btn-primary')
      */
     removeClass: (className: string) => DomProxy<T>
 
-    /** Toggle a class on the element
+    /** Toggle a class on the element. If given a second argument, it will be used as a boolean to determine whether to add or remove the class. Otherwise, it will be toggled from whatever it is currently.
      * @param className The class name
      * @returns This {@link DomProxy}
      * @example
      * $('button').toggleClass('btn')
+     *
+     * @example
+     * const mediaQuery = window.matchMedia('(max-width: 600px)')
+     * $('button').toggleClass('lilBtn', mediaQuery.matches)
      */
     toggleClass: (className: string) => DomProxy<T>
 
-    /** Set an attribute on the element. If the value is undefined, it will be set to `""`, which is useful for boolean attributes like disabled or hidden.
-     * @param attr The attribute name
+    /** Set one or more attributes on the element. If the first argument is an object, it will be treated as a map of attributes and values. Otherwise, you can pass a string as a key for a single attribute and the second argument will be treated as the value. If the value is undefined, it will be set to `""`, which is useful for boolean attributes like disabled or hidden.
+     * @param attr The attribute name or object containing attributes and values
      * @param value The attribute value (optional)
      * @returns This {@link DomProxy}
      * @example
      * $('button').set('disabled')
      * $('button').set('formaction', '/submit')
+     * $('button').set({ disabled: true, formaction: '/submit' })
      */
-    set: (attr: string, value?: string) => DomProxy<T>
+    set: (
+      attr: string | { [key: string]: string },
+      value?: string
+    ) => DomProxy<T>
 
     /** Remove an attribute from the element
      * @param attr The attribute name
@@ -195,16 +236,21 @@ declare module "droxy" {
      */
     unset: (attr: string) => DomProxy<T>
 
-    /** Toggle an attribute on the element
+    /** Toggle an attribute on the element. It can take a second argument, which will be used as a boolean to determine whether to add or remove the attribute. Otherwise, it will be toggled from whatever it is currently.
+     *
      * @param attr The attribute name
      * @returns This {@link DomProxy}
      * @example
      * $('button').toggle('disabled')
+     *
+     * @example
+     * let clickedTooManyTimes = false
+     * $('button').toggle('disabled', clickedTooManyTimes)
      */
-    toggle: (attr: string) => DomProxy<T>
+    toggle: (attr: string, value?: boolean) => DomProxy<T>
 
     /**
-     * Set a data attribute on the element.
+     * Set a data attribute on the element. If the first argument is an object, it will be treated as a map of data attributes and values. Otherwise, it will be treated as a single data attribute and the second argument will be treated as the value.
      * @param key The dataset key
      * @param value The corresponding value for the dataset key
      * @returns This {@link DomProxy}
@@ -212,7 +258,10 @@ declare module "droxy" {
      * $('div').data('info', 'extraDetails')
      * This implies: element.dataset.info = 'extraDetails'
      */
-    data: (key: string, value: string) => DomProxy<T>
+    data: (
+      key: string | { [key: string]: string },
+      value?: string
+    ) => DomProxy<T>
 
     /**
      * Attaches children to the element based on the provided options.
@@ -341,11 +390,13 @@ declare module "droxy" {
     /**
      * Schedules a function for deferred execution on the element. This will push the operation to the very end of the internal event loop.
      *
+     * This captures the element's state at the moment it is called which is usually **at the very beginning of the queue**. Generally, you will have changed things since then, so it should not be mixed with:
+     * - context switching methods like `next`, `prev`, `first`, `last`, `parent`, `ancestor`, `pick`, `pickAll`, `kids`, or `siblings`.
+     * - conditional methods like `if` or `takeWhile`
+     *
      * Usually, everything will happen in sequence anyways. Given the predictability of each queue, `defer` has limited use cases and should be used sparingly. The whole point of Droxy is to make things predictable, so you should just put the function at the end of the chain if you can.
      *
-     * The only problem is if you set up an event listener using the same variable that has lots of queued behavior-- especially calls to the `wait` method. Just wrap the `wait` call and everything after it in `defer` to ensure that event handlers don't get stuck behind these in the queue.
-     *
-     * This captures the collection's state at the time of the call, so it should not be mixed with context-sensitive methods like `next`, `prev`, `first`, `last`, `parent`, `ancestor`, `pick`, `pickAll`, `kids`, or `siblings`.
+     * The only problem is if you set up an event listener using the same variable that has lots of queued behavior-- especially calls to the `wait` method. Just wrap the `wait` call and everything after it in `defer` to ensure that event handlers don't get stuck behind these in the queue. Or, do the smart thing and just make a new variable.
      *
      * Honestly, I'm not sure if this even makes much sense. I just spent a bunch of time building a crazy queue system, and I feel like I need to expose it. If you have any ideas for how to make this more useful, please open an issue or PR.
      *
@@ -474,6 +525,7 @@ declare module "droxy" {
    * - {@link DomProxyCollection.moveTo} - Moves the elements to a new parent element in the DOM. By default, it is appended inside the new parent element, but you change change this with the `position` option. The original elements are removed from their current location. The `all` option is technically available, but it will simply use the last element in the collection. This is because you can only move an element to one place at a time. If you want to clone the elements instead of moving them, use {@link DomProxyCollection.cloneTo}.
    * - {@link DomProxyCollection.become} - Replaces the elements with new elements. By default, the elements are moved to the new location. To clone them instead, set the mode to 'clone'.
    * - {@link DomProxyCollection.purge} - Remove the elements from the DOM entirely
+   * - {@link DomProxyCollection.send} - Sends an HTTP request using the current element as the body of the request unless otherwise specified.
    * - {@link DomProxyCollection.do} - Executes an asynchronous function and waits for it to resolve before continuing the chain (can be synchronous too)
    * - {@link DomProxyCollection.defer} - Schedules a function for deferred execution on the elements. This will push the operation to the very end of the internal event loop.
    * - {@link DomProxyCollection.transition} - Animate the elements using the WAAPI. The queue will wait for the animation to complete before continuing.
@@ -533,13 +585,23 @@ declare module "droxy" {
       handler: EventListenerOrEventListenerObject
     ) => DomProxyCollection<T>
 
-    /** Change the HTML of the element The string will **NOT** be sanitized. If you want to sanitize the HTML, use `sanitize` instead.
+    /** Change the HTML of the element
+     *
+     * - The string will **NOT** be sanitized. If you want to sanitize the HTML, use `sanitize` instead.
+     *
+     * - By default, only the element's children will be replaced (innerHTML). If you want to replace the element itself (outerHTML), set the second argument to true.
+     *
      * @param newHtml The new HTML
+     * @param outerHTML If true, the element itself will be replaced (outerHTML)
      * @returns This {@link DomProxyCollection}
      * @example
      * $('.container').html('<span>New Content</span>')
+     * // Every element with the class 'container' will now contain the span
+     * @example
+     * $('.container').html('<span>New Content</span>', true)
+     * // Every element with the class 'container' will now be replaced with the span
      */
-    html: (newHtml: string) => DomProxyCollection<T>
+    html: (newHtml: string, outerHTML?: boolean) => DomProxyCollection<T>
 
     /**
      * Sanitizes a string of untrusted HTML using the setHTML API, and sets the sanitized HTML to the matched element(s).
@@ -578,17 +640,17 @@ declare module "droxy" {
      * - For `select[multiple]`: Expects an array of values to select multiple options.
      * @returns This {@link DomProxyCollection}.
      * @example
-     * $('input[type="text"]').value('New Value')
-     * $('input[type="checkbox"]').value(true)
-     * $('input[type="radio"]').value('radio1')
-     * $('input[type="file"]').value(myFileList)
-     * $('select[multiple]').value(['option1', 'option2'])
+     * $('input[type="text"]').val('New Value')
+     * $('input[type="checkbox"]').val(true)
+     * $('input[type="radio"]').val('radio1')
+     * $('input[type="file"]').val(myFileList)
+     * $('select[multiple]').val(['option1', 'option2'])
      */
     val: (
       newValue: string | number | (string | number)[] | FileList
     ) => DomProxyCollection<T>
 
-    /** Adds one or more CSS rule(s) to the elements. If the first argument is an object, it will be treated as a map of CSS properties and values. Otherwise, it will be treated as a single CSS property and the second argument will be treated as the value.
+    /** Adds one or more CSS rule(s) to the elements. If the first argument is an object, it will be treated as a map of CSS properties and values. Otherwise, it will be treated as a key for a single CSS property and the second argument will be treated as the value.
      * @param prop The CSS property
      * @param value The CSS value
      * @returns This {@link DomProxyCollection}
@@ -602,40 +664,67 @@ declare module "droxy" {
       value?: string
     ) => DomProxyCollection<T>
 
-    /** Add a stylesheet to the ENTIRE DOCUMENT (this is useful for things like :hover styles). Got a good idea for how to make this scoped to a single element? Open a PR!
+    /** Add a stylesheet to the ENTIRE DOCUMENT (this is useful for things like :hover styles).
+     *
+     * - This should be used only when you need to do something like set a pseudo-class on the fly. Otherwise, just write a real stylesheet.
+     *
+     * - Got a good idea for how to make this scoped to a single element? Open a PR! I was thinking something like the `@scope` rule being automatically inserted, but that's still only in Chromium browsers.
+     *
+     * {@link https://css.oddbird.net/scope/explainer/}
+     *
+     * - Right now, every rule will be given an `!important` flag, so it will override any existing styles. This is drastic I know, but it's the only way to make this work if you're creating other inline styles.
+     *
      * @param css The CSS to add
      * @returns This {@link DomProxyCollection}
      * @example
-     * $$('.buttons').addStylesheet('button:hover { color: red; }')
+     * $('button')
+     *    .addStylesheet(`
+     *        button:hover {
+     *          color: red;
+     *          }
+     *        `)
      * // Now all buttons on the page will turn red when hovered
      */
     addStylesheet: (css: string) => DomProxyCollection<T>
 
-    /** Add a class to the elements
+    /** Add one or more classes to the elements. If you want to add more than one, just separate them by a comma. Or, you can put them all in an array and use spread syntax.
      * @param className The class name
      * @returns This {@link DomProxyCollection}
      * @example
      * $$('.buttons').addClass('btn')
+     * @example
+     * const classes = ['btn', 'btn-primary']
+     * $$('.buttons').addClass(...classes)
+     * @example
+     * $$('.buttons').addClass('btn', 'btn-primary')
      */
     addClass: (className: string) => DomProxyCollection<T>
 
-    /** Remove a class from the elements
+    /** Remove one or more classes from the elements. If you want to remove more than one, just separate them by a comma. Or, you can put them all in an array and use spread syntax.
      * @param className The class name
      * @returns This {@link DomProxyCollection}
      * @example
      * $$('.buttons').removeClass('btn')
+     * @example
+     * const classes = ['btn', 'btn-primary']
+     * $$('.buttons').removeClass(...classes)
+     * @example
+     * $$('.buttons').removeClass('btn', 'btn-primary')
      */
     removeClass: (className: string) => DomProxyCollection<T>
 
-    /** Toggle a class on the elements
+    /** Toggle a class on the elements. If given a second argument, it will force the class to be added or removed based on the truthiness of the second argument. Otherwise, it will toggle the class.
      * @param className The class name
      * @returns This {@link DomProxyCollection}
      * @example
      * $$('.buttons').toggleClass('btn')
+     * @example
+     * const mediaQuery = window.matchMedia('(max-width: 768px)')
+     * $$('.buttons').toggleClass('windowIsSmall', mediaQuery.matches)
      */
     toggleClass: (className: string) => DomProxyCollection<T>
 
-    /** Set an attribute on the elements. If the value is undefined, it will be set to `""`, which is useful for boolean attributes like disabled or hidden.
+    /** Set one or more attributes on all of the elements. If the first argument is an object, it will be treated as a map of attributes and values. Otherwise, it will be treated as a single attribute and the second argument will be treated as the value. If the first argument is a string, and the value is undefined, it will be set to `""`, which is useful for boolean attributes like disabled or hidden.
      * @param attr The attribute name
      * @param value The attribute value
      * @returns This {@link DomProxyCollection}
@@ -643,7 +732,10 @@ declare module "droxy" {
      * $$('.buttons').set('disabled')
      * $$('.buttons').set('formaction', '/submit')
      */
-    set: (attr: string, value: string) => DomProxyCollection<T>
+    set: (
+      attrOrObj: string | { [key: string]: string | number },
+      value?: string
+    ) => DomProxyCollection<T>
 
     /** Remove an attribute from the elements
      * @param attr The attribute name
@@ -653,23 +745,39 @@ declare module "droxy" {
      */
     unset: (attr: string) => DomProxyCollection<T>
 
-    /** Toggle an attribute on the elements
+    /** Toggle an attribute on the elements. It can take a second argument to force the attribute to be added or removed based on the truthiness of the second argument. Otherwise, it will toggle the attribute.
      * @param attr The attribute name
      * @returns This {@link DomProxyCollection}
      * @example
      * $$('.buttons').toggle('disabled')
+     * @example
+     * let clickedTooManyTimes = false
+     * $$('.buttons').toggle('disabled', clickedTooManyTimes)
      */
     toggle: (attr: string) => DomProxyCollection<T>
 
-    /** Set a data attribute on the elements.
+    /** Set a data attribute on the elements. If the first argument is an object, it will be treated as a map of data attributes and values. Otherwise, it will be treated as a key for a single data attribute and the second argument will be treated as the value.
      * @param key The dataset key
      * @param value The corresponding value for the dataset key
      * @returns This {@link DomProxyCollection}
      * @example
      * $$('.buttons').data('info', 'extraDetails')
-     * This implies: element.dataset.info = 'extraDetails'
+     * // document
+     * //   .querySelectorAll('.buttons')
+     * //   .forEach(el => el.dataset.info = 'extraDetails')
+     *
+     * $$('.buttons').data({ info: 'extraDetails', id: 123 })
+     * // document
+     * //   .querySelectorAll('.buttons')
+     * //   .forEach(el => {
+     * //     el.dataset.info = 'extraDetails'
+     * //     el.dataset.id = 123
+     * //   })
      */
-    data: (key: string, value: string) => DomProxyCollection<T>
+    data: (
+      keyOrObj: string | { [key: string]: string | number },
+      value?: string
+    ) => DomProxyCollection<T>
 
     /**
      * Attaches children to the elements based on the provided options.
@@ -783,13 +891,15 @@ declare module "droxy" {
      */
     purge: () => DomProxyCollection<T>
 
-    /** Execute an asynchronous function and wait for it to resolve before continuing the chain (can be synchronous too)
-     * @param fn The async callback. This can receive the element as an argument.
+    /** Executes an asynchronous function on all of the elements and waits for it to resolve before continuing the chain (can be synchronous too)
+     *
+     * - The functions will operate on each element unconditionally. If you need to use conditional logic, either use the `if` method or first filter the collection with `takeWhile` or the `filter` array method.
+     * @param fn The async callback. This can receive the elements as an argument.
      * @returns This {@link DomProxyCollection}
      * @example
      * $$('.buttons')
      * .css('color', 'red')
-     * .do(async (el) => { // The element is passed as an argument
+     * .do(async (el) => { // The elements are passed as an argument
      *   const response = await fetch('/api')
      *  const data = await response.json()
      * el.text(data.message) // All the methods are still available
@@ -800,13 +910,16 @@ declare module "droxy" {
       fn: (el: DomProxyCollection) => Promise<void> | void
     ) => DomProxyCollection<T>
 
-    /** Schedules a function for deferred execution on the elements. This will push the operation to the very end of the internal event loop.
+    /**
+     * Schedules a function for deferred execution on all of the elements. This will push the operation to the very end of the internal event loop.
+     *
+     * This captures the collection's state at the moment it is called which is usually **at the very beginning of the queue**. Generally, you will have changed things since then, so it should not be mixed with:
+     * - context switching methods like `next`, `prev`, `first`, `last`, `parent`, `ancestor`, `pick`, `pickAll`, `kids`, or `siblings`.
+     * - conditional methods like `if` or `takeWhile`
      *
      * Usually, everything will happen in sequence anyways. Given the predictability of each queue, `defer` has limited use cases and should be used sparingly. The whole point of Droxy is to make things predictable, so you should just put the function at the end of the chain if you can.
      *
-     * The only problem is if you set up an event listener using a variable that has lots of queued behavior-- especially calls to the `wait` method. Just wrap the `wait` call and everything after it in `defer` to ensure that event handlers don't get stuck behind these in the queue.
-     *
-     * This will capture the state of the DomProxyCollection BEFORE THE CHAIN and pass it to the function, so this should not be mixed with context switching methods like `next` or `pick`.
+     * The only problem is if you set up an event listener using the same variable that has lots of queued behavior-- especially calls to the `wait` method. Just wrap the `wait` call and everything after it in `defer` to ensure that event handlers don't get stuck behind these in the queue. Or, do the smart thing and just make a new variable.
      *
      * Honestly, I'm not sure if this even makes much sense. I just spent a bunch of time building a crazy queue system, and I feel like I need to expose it. If you have any ideas for how to make this more useful, please open an issue or PR.
      *
@@ -830,7 +943,7 @@ declare module "droxy" {
      * @example
      * // Please limit the use of this method anywhere other than the end of a chain. That's confusing.
      * // Only use it for race conditions or other edge cases.
-     * display
+     * displays
      *    .defer((el) => el.css("color", "blue"))
      *    .text("HALF A SECOND OF GLORY") // Text is black
      *    .wait(500).text("Hello, world!") // Text is red
@@ -906,7 +1019,9 @@ declare module "droxy" {
   /**
    * Finds the first element in the DOM that matches a CSS selector and returns it with some extra, useful methods.
    *
-   * These methods can be chained together to create a sequence of actions that will be executed in order (including asynchronous tasks).
+   * If given a string that starts with `<`, it will create a new element with the given tag name and return it as a {@link DomProxy} object.
+   *
+   * It gives Dom Elements 43 methods that can be chained together to create a sequence of actions that will be executed in order (including asynchronous tasks).
    *
    * If the 'fixed' parameter is set to true, the proxy reference is fixed and cannot be switched to target another DOM element.
    *
@@ -945,7 +1060,11 @@ declare module "droxy" {
   /**
    * Finds all elements in the DOM that match a CSS selector and returns them with some extra, useful methods.
    *
-   * These methods can be chained together to create a sequence of actions that will be executed in order (including asynchronous tasks).
+   * If given a string that starts with `<`, it will create a new element with the given tag name and return it as a {@link DomProxyCollection} object.
+   *
+   * It can also accept HTMLElements and NodeLists, which will be converted to a {@link DomProxyCollection} object.
+   *
+   * These contain 43 methods that can be chained together to create a sequence of actions that will be executed in order (including asynchronous tasks).
    *
    * If the 'fixed' parameter is set to true, the proxy reference is fixed and cannot be switched to target another set of DOM elements.
    *
@@ -1021,18 +1140,19 @@ declare module "droxy" {
   ): void
 
   /**
-   * Transforms any function into one that returns a Promise, enabling easy integration into DomProxy chains. This is particularly useful for things like setTimeout, setInterval, or older APIs that are callback-based. It works just like returning a promise normally, but there are a few conveniences built in:
+   * Transforms any function into one that returns a Promise, enabling easy integration into DomProxy chains. This is particularly useful for things like setTimeout or older APIs that are callback-based. It works just like returning a promise normally, but there are a few conveniences built in:
    *
    * - All promise rejections are automatically caught and directed through the default error handler, which can be customized.
-   * - If neither resolve or reject are called within a specified timeout, the promise resolves automatically with no value. This prevents the chain from hanging indefinitely when you simply forget to meet a condition. Remember-- you can always reject the promise at any time.
+   * - If neither resolve or reject are called within a specified timeout, the promise will reject with a timeout error. This prevents the chain from hanging indefinitely when you simply forget to meet a condition. Remember-- you can always reject the promise at any time.
    * - A `meta` object can be optionally passed to add additional metadata for debugging or error handling. The `meta` object is fully extensible. Any extra fields you add will be accessible in the default error handler, making it highly flexible for diagnostic purposes.
+   * - If you pass an `interval` property in the `meta` object, the promise will automatically retry the function call after the specified interval if it rejects. This is useful for things like polling or waiting for an element to appear.
    *
    * Usage in a chain allows you to feed its values into a DomProxy method like `text()` or `html()`, or use it within the {@link DomProxy.do} method to use the element itself as an argument.
    *
    * @param {(...args: any[]) => any} fn - The function to be promisified. Must call either the `resolve` or `reject` function.
-   * @param {number} [timeout=5000] - The amount of time in milliseconds to wait before resolving the promise automatically. Defaults to 5000 (5 seconds).
    * @param {object} [meta={}] - Metadata for debugging and error-handling. Can include any key-value pairs. Custom fields will be available in the default error handler.
-   *
+   * @param {number} [meta.timeout=5000] - The amount of time in milliseconds to wait before resolving the promise automatically. Defaults to 5000 (5 seconds).
+   * @param {number} [meta.interval] - The amount of time in milliseconds to wait before trying again. Will not retry if omitted.
    * @returns {(...args: any[]) => Promise<any>} - Returns a new function that, when invoked, returns a Promise.
    *
    * @example
@@ -1069,17 +1189,16 @@ declare module "droxy" {
    * });
    *
    * @example
-   * // Demonstrating timeout and metadata
-   * const onlyWarnIfLoadIsSlow = promisify(
-   *   (resolve, reject) => {
-   *     const textContent = display.textContent;
-   *     if (textContent === "Loading..." || "") {
-   *            resolve("Sorry for the delay!");
-   *          }
-   *   },
-   *   500,
+   * // Advanced example: Using metadata to customize error handling
+   * const poorlyNamedFunction = promisify(
+   *  (resolve, reject) => {
+   *   // Do something
+   *  resolve();
+   * },
    *   {
-   *     fnName: "onlyWarnIfLoadIsSlow",
+   *     timeout: 1000, // will reject after 1 second
+   *     interval: 500, // will try again every half second
+   *     fnName: "poorlyNamedFunction",
    *     fnArgs: ["arg1", "arg2"],
    *     customDebugInfo: "Additional custom information"
    *   }
@@ -1092,15 +1211,21 @@ declare module "droxy" {
    */
   export function promisify(
     fn: (...args: any[]) => void,
-    timeout?: number,
-    meta?: { [key: string]: any }
+    meta?: {
+      timeout?: number
+      interval?: number
+      [key: string]: any
+    }
   ): (...args: any[]) => Promise<any>
 
   interface FetchOptions extends RequestInit {
-    fallback?: string
+    onError?: () => void
     onSuccess?: () => void
+    onWait?: () => void
+    waitTime?: number
     error?: string
     sanitize?: boolean
+    runScripts?: boolean
     sanitizer?: Function
   }
 

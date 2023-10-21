@@ -1,23 +1,25 @@
-export function $(string) {
-  return addProxy("$", string)
+export function $(selector, fixed = false) {
+  return createProxy("$", selector, fixed)
 }
 
-export function $$(string) {
-  return addProxy("$$", string)
+export function $$(selector, fixed = false) {
+  return createProxy("$$", selector, fixed)
 }
 
-function addProxy(type, string) {
-  const element = getDOMElement(string, false, type === "$$")
+function createProxy(type, selector, fixed = false) {
+  const elements = getDOMElement(selector, {
+    all: type === "$$",
+    sanitize: false,
+  })
 
-  if (!element[0]) {
-    throw new Error(`No element found for selector: ${string}`)
+  if (!elements[0]) {
+    console.warn(`No elements found for selector: ${selector}`)
   }
 
-  return addMethods(type, string, element[1] ? element : element[0])
+  return addMethods(selector, elements)
 }
 
-function createQueue() {
-  const priorityQueue = []
+export function createQueue() {
   const mainQueue = []
   const deferredQueue = []
   let isRunning = false
@@ -26,24 +28,15 @@ function createQueue() {
     if (isRunning) return
     isRunning = true
 
-    while (priorityQueue.length > 0 || mainQueue.length > 0) {
-      if (priorityQueue.length > 0) {
-        const { fn, args } = priorityQueue.shift()
-        await fn(...args)
-      } else if (mainQueue.length > 0) {
-        const fn = mainQueue.shift()
-        await fn()
-      }
+    while (mainQueue.length > 0) {
+      const fn = mainQueue.shift()
+      await fn()
     }
 
-    if (
-      deferredQueue.length > 0 &&
-      mainQueue.length === 0 &&
-      priorityQueue.length === 0
-    ) {
+    if (deferredQueue.length > 0 && mainQueue.length === 0) {
       while (deferredQueue.length > 0) {
         const { fn, args } = deferredQueue.shift()
-        await fn(...args)
+        await eachArgument(fn, args)
       }
     }
 
@@ -52,11 +45,6 @@ function createQueue() {
 
   function addToQueue(fn) {
     mainQueue.push(fn)
-    runQueue()
-  }
-
-  function prioritize(fn, args = []) {
-    priorityQueue.push({ fn, args })
     runQueue()
   }
 
@@ -69,103 +57,83 @@ function createQueue() {
 
   return {
     addToQueue,
-    prioritize,
     defer,
   }
 }
 
-function createApplyFunc(addToQueue, proxy) {
-  const isThenable = (value) => value && typeof value.then === "function"
-
-  return function applyFunc(fn, context) {
+export function queueAndReturn(addToQueue, getProxy) {
+  return function queueFunction(fn, eager = true) {
     return (...args) => {
       addToQueue(async () => {
         try {
-          const resolvedArgs = []
-          for (const arg of args) {
-            resolvedArgs.push(isThenable(arg) ? await arg : arg)
-          }
-          const result = fn(...resolvedArgs)
-          if (isThenable(result)) {
-            await result
-          }
+          await eachArgument(fn, args, eager)
         } catch (error) {
           console.error(error)
         }
       })
-      return proxy()
+      return getProxy()
     }
   }
 }
 
-function handlerMaker(element, customMethods) {
+export function handlerMaker(elements, customMethods) {
   return {
     get(_, prop) {
+      if (elements.length && elements.length === 1) {
+        elements = elements[0]
+      }
+
       if (prop === "raw") {
-        return element
+        return elements
       }
 
       if (prop in customMethods) {
         return customMethods[prop]
       }
 
-      if (Array.isArray(element) && element[prop]) {
-        return typeof element[prop] === "function"
-          ? element[prop].bind(element)
-          : element[prop]
-      }
-
-      return element[prop]
-    },
-    set(_, prop, value) {
-      if (prop in customMethods) {
-        customMethods[prop] = value
-        return true
-      }
-      element[prop] = value
-      return true
+      return typeof elements[prop] === "function"
+        ? elements[prop].bind(elements)
+        : elements[prop]
     },
   }
 }
 
-function addMethods(type, selector, target) {
-  let proxy = null
-  let isSingle = type === "$"
-
-  const toOneOrMany = (func) => {
-    return isSingle ? func(target) : target.forEach((el) => func(el))
+async function eachArgument(fn, args, eager = true) {
+  const isThenable = (value) => value && typeof value.then === "function"
+  const resolvedArgs = []
+  for (const arg of args) {
+    resolvedArgs.push(isThenable(arg) && eager ? await arg : arg)
   }
+  const result = fn(...resolvedArgs)
+  if (isThenable(result)) {
+    await result
+  }
+}
+export function addMethods(selector, target) {
+  let proxy = null
 
-  const { addToQueue, prioritize, defer } = createQueue()
-  const applyFunc = createApplyFunc(addToQueue, () => proxy)
+  const { addToQueue, defer } = createQueue()
+  const queueFunction = queueAndReturn(addToQueue, () => proxy)
 
-  const makeMethod = (action) => {
-    return applyFunc((...args) => {
-      toOneOrMany((el) => action(el, ...args))
+  const makeMethod = (action, context) => {
+    return queueFunction(async (...args) => {
+      await Promise.all(target.map((el) => action(el, ...args)))
     })
   }
 
   const customMethods = {
     on: makeMethod((el, ev, fn) => {
-      el.addEventListener(ev, (...args) => {
-        prioritize(fn, args)
-      })
+      el.addEventListener(ev, fn)
     }),
 
     once: makeMethod((el, ev, fn) => {
-      el.addEventListener(
-        ev,
-        (...args) => {
-          prioritize(fn, args)
-        },
-        { once: true }
-      )
+      el.addEventListener(ev, fn, { once: true })
     }),
 
-    delegate: makeMethod((el, event, subSelector, handler) => {
-      el.addEventListener(event, (e) => {
-        if (e.target.matches(subSelector)) {
-          prioritize(handler, [e])
+    delegate: makeMethod((el, ev, selector, fn) => {
+      el.addEventListener(ev, (event) => {
+        if (event.target.matches(selector)) {
+          fn(event)
         }
       })
     }),
@@ -174,7 +142,21 @@ function addMethods(type, selector, target) {
       el.removeEventListener(ev, fn)
     }),
 
-    html: makeMethod((el, newHtml) => (el.innerHTML = newHtml)),
+    html: makeMethod((el, newHtml, outer) => {
+      if (outer) {
+        const nextSibling = el.nextSibling // We need to get the nextSibling before removing the element
+        el.outerHTML = newHtml // Otherwise, we lose the reference, and the proxy is empty
+
+        const newElement = nextSibling // If nextSibling is null, then we're at the end of the list
+          ? nextSibling.previousSibling // So, we get the previousSibling from where we were
+          : el.parentElement.lastElementChild // Otherwise, we get the lastElementChild from the parent
+
+        target = [newElement]
+        proxy = updateProxy(target)
+      } else {
+        el.innerHTML = newHtml
+      }
+    }),
 
     text: makeMethod((el, newText) => (el.textContent = newText)),
 
@@ -184,7 +166,7 @@ function addMethods(type, selector, target) {
 
     val: makeMethod((el, newValue) => setFormElementValue(el, newValue)),
 
-    css: makeMethod((el, prop, value) => stringOrObject(el.style, prop, value)),
+    css: makeMethod((el, prop, value) => parseArgument(el.style, prop, value)),
 
     addStyleSheet: makeMethod((_, rules) => addStyleSheet(rules)),
 
@@ -195,16 +177,14 @@ function addMethods(type, selector, target) {
     toggleClass: makeMethod(Class("toggle")),
 
     set: makeMethod((el, attr, value = "") =>
-      stringOrObject(el, attr, value, true)
+      parseArgument(el, attr, value, true)
     ),
 
     unset: makeMethod((el, attr) => el.removeAttribute(attr)),
 
     toggle: makeMethod((el, attr) => el.toggleAttribute(attr)),
 
-    data: makeMethod((el, keyOrObj, value) =>
-      stringOrObject(el.dataset, keyOrObj, value)
-    ),
+    data: makeMethod((el, key, value) => parseArgument(el.dataset, key, value)),
 
     attach: makeMethod((el, ...children) => attach(el, ...children)),
 
@@ -213,7 +193,7 @@ function addMethods(type, selector, target) {
     }),
 
     moveTo: makeMethod((el, parentSelector, options) => {
-      moveOrClone(el, parentSelector, { mode: "move", ...options })
+      moveOrClone(el, parentSelector, options)
     }),
 
     become: makeMethod((el, replacements, options) => {
@@ -222,42 +202,40 @@ function addMethods(type, selector, target) {
 
     purge: makeMethod((el) => el.remove()),
 
-    do: makeMethod((el, fn) => {
-      const wrappedElement = addMethods(type, selector, el)
-      fn(wrappedElement)
+    do: makeMethod(async (el, fn) => {
+      const wrappedElement = addMethods(selector, [el])
+      return await fn(wrappedElement)
     }),
 
     defer: makeMethod((el, fn) => {
-      const wrappedElement = addMethods(type, selector, el)
-      defer(fn, [wrappedElement])
+      const wrappedElement = addMethods(selector, [el])
+      return defer(fn, [wrappedElement])
     }),
 
-    transition: applyFunc((keyframes, options) =>
-      transition(Array.isArray(target) ? target : [target], keyframes, options)
-    ),
+    transition: makeMethod((el, keyframes, options) => {
+      return el.animate(keyframes, options).finished
+    }),
 
-    wait: applyFunc(
-      (duration) => new Promise((resolve) => setTimeout(resolve, duration))
-    ),
+    wait: makeMethod((el, duration) => {
+      return new Promise((resolve) => setTimeout(resolve, duration))
+    }),
   }
 
   function updateProxy(newTarget) {
     const handler = handlerMaker(newTarget, customMethods)
     const proxy = new Proxy(customMethods, handler)
     proxy.raw = newTarget
-    isSingle = !(newTarget instanceof Array)
     return proxy
   }
 
   proxy = updateProxy(target)
   return proxy
 }
-function setFormElementValue(element, value) {
+export function setFormElementValue(element, value) {
   if (element instanceof HTMLInputElement) {
     const inputTypes = {
       checkbox: () => (element.checked = !!value),
       radio: () => (element.checked = element.value === value),
-      file: () => (element.files = value),
       default: () => {
         if (typeof value === "string") element.value = value
       },
@@ -282,11 +260,7 @@ function setFormElementValue(element, value) {
   }
 }
 
-function Class(type) {
-  return (el, ...classes) => el.classList[type](...classes)
-}
-
-function stringOrObject(prop, stringOrObj, value, attr) {
+export function parseArgument(prop, stringOrObj, value, attr) {
   if (typeof stringOrObj === "string") {
     attr ? prop.setAttribute(stringOrObj, value) : (prop[stringOrObj] = value)
   } else if (typeof stringOrObj === "object") {
@@ -294,13 +268,18 @@ function stringOrObject(prop, stringOrObj, value, attr) {
   }
 }
 
-function addStyleSheet(rules) {
+export function addStyleSheet(rules) {
+  const importantRules = rules.trim().split(";").join(" !important;")
   const style = document.createElement("style")
-  style.textContent = rules
+  style.textContent = importantRules
   document.head.appendChild(style)
 }
 
-function attach(element, ...args) {
+export function Class(type) {
+  return (el, ...classes) => el.classList[type](...classes)
+}
+
+export function attach(element, ...args) {
   const options =
     args[args.length - 1] instanceof Object &&
     ("sanitize" in args[args.length - 1] || "position" in args[args.length - 1])
@@ -309,17 +288,15 @@ function attach(element, ...args) {
 
   const children = args.flat()
 
+  if ((children instanceof NodeList || Array.isArray(children)) && !options) {
+    options.all = true
+  }
+
   modifyDOM(element, children, options)
 }
 
-function moveOrClone(elements, parentSelector, options = {}) {
-  let parents = getDOMElement(parentSelector, options.sanitize, options.all)
-
-  if (!Array.isArray(parents)) {
-    parents = [parents]
-  }
-
-  if (!parents.length) return
+export function moveOrClone(elements, parentSelector, options = {}) {
+  let parents = getDOMElement(parentSelector, options)
 
   const children = Array.isArray(elements) ? elements : [elements].flat()
 
@@ -328,11 +305,7 @@ function moveOrClone(elements, parentSelector, options = {}) {
   })
 }
 
-function become(
-  elements,
-  replacements,
-  options = { mode: "clone", match: "cycle" }
-) {
+export function become(elements, replacements, options = { mode: "clone" }) {
   const handleReplacement = (element, replacement) => {
     if (!replacement) return
     const newElement =
@@ -340,35 +313,29 @@ function become(
     element.replaceWith(newElement)
   }
   const proxyOrDOM = (candidate) => candidate.raw || candidate
-  const makeArray = (candidate) =>
-    Array.isArray(candidate) ? candidate : [candidate]
+  const makeArray = (candidate) => {
+    if (Array.isArray(candidate)) return candidate
+    if (candidate instanceof HTMLElement) return [candidate]
+    if (candidate instanceof NodeList) return Array.from(candidate)
+    return []
+  }
 
   const elementsArray = makeArray(proxyOrDOM(elements))
   const replacementsArray = makeArray(proxyOrDOM(replacements))
 
-  elementsArray.forEach((element, index) => {
-    const replacement =
-      options.match === "cycle"
-        ? replacementsArray[index % replacementsArray.length]
-        : replacementsArray[index] || null
-
-    if (replacement) {
-      handleReplacement(element, replacement)
-    } else if (options.match === "remove") {
-      element.remove()
-    }
-  })
-}
-
-function transition(elements, keyframes, options) {
-  const animations = elements.map((element) =>
-    element.animate(keyframes, options)
+  elementsArray.forEach((element, index) =>
+    handleReplacement(element, replacementsArray[index])
   )
-  return Promise.all(animations.map((animation) => animation.finished))
 }
 
-function modifyDOM(parent, children, options) {
-  const { position = "append", sanitize = true, mode = "move" } = options
+export function modifyDOM(parent, children, options) {
+  const {
+    position = "append",
+    sanitize = true,
+    mode = "move",
+    sanitizer,
+    all,
+  } = options
 
   const DOMActions = {
     append: (parent, child) => parent.append(child),
@@ -381,25 +348,27 @@ function modifyDOM(parent, children, options) {
     mode === "clone" ? (el) => el.cloneNode(true) : (el) => el
 
   children.forEach((child) => {
-    const domElements = getDOMElement(child, sanitize)
+    const domElements = getDOMElement(child, { sanitize, sanitizer, all })
     domElements.forEach((domElement) => {
       DOMActions[position](parent, getCloneOrNode(domElement))
     })
   })
 }
 
-function getDOMElement(item, sanitize = true, all = false) {
-  return typeof item === "string" && item.trim().startsWith("<")
-    ? createDOMFromString(item, sanitize) // If it's an HTML string, create DOM elements from it
-    : item instanceof HTMLElement // If it's already a DOM element, return it
-    ? [item]
-    : all // If the all flag is set, return all matching elements from the DOM
-    ? Array.from(document.querySelectorAll(item))
+export function getDOMElement(item, options) {
+  return typeof item === "string" && item.trim().startsWith("<") // If it's an HTML string,
+    ? createDOMFromString(item, options) // create DOM elements from it
+    : item instanceof HTMLElement // If it's already a DOM element
+    ? [item] // return it as an array
+    : item instanceof NodeList // If it's a NodeList
+    ? Array.from(item) // return it as an array
+    : options.all // If the all flag is set
+    ? Array.from(document.querySelectorAll(item)) // return all matching elements from the DOM as an array
     : [document.querySelector(item)] // Otherwise, return the first matching element from the DOM as an array
 }
 
-function createDOMFromString(string, sanitize = true) {
+export function createDOMFromString(string, { sanitize = true, sanitizer }) {
   const div = document.createElement("div")
-  sanitize ? div.setHTML(string) : (div.innerHTML = string)
+  sanitize ? div.setHTML(string, sanitizer) : (div.innerHTML = string)
   return Array.from(div.children)
 }
